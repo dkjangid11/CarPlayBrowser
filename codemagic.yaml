@@ -1,0 +1,29 @@
+workflows:
+  ios-build-unsigned:
+    name: Build iOS CarPlay Browser (Unsigned for TrollStore)
+    environment:
+      xcode: latest
+    scripts:
+      - name: Generate Xcode project
+        script: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build iOS App (Unsigned)
+        script: |
+          mkdir -p build/ios/ipa
+          xcodebuild build \
+            -project CarPlayBrowser.xcodeproj \
+            -scheme CarPlayBrowser \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+      - name: Package IPA
+        script: |
+          cd build/Build/Products/Release-iphoneos
+          mkdir Payload
+          cp -r CarPlayBrowser.app Payload/
+          zip -r CarPlayBrowser.ipa Payload
+          cp CarPlayBrowser.ipa $CM_BUILD_DIR/build/ios/ipa/
+    artifacts:
+      - build/ios/ipa/*.ipa
