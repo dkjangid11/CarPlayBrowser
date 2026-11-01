@@ -6,10 +6,11 @@ workflows:
     scripts:
       - name: Generate Xcode project
         script: |
-          brew install xcodegen
+          brew install xcodegen ldid
           xcodegen generate
       - name: Build iOS App (Unsigned)
         script: |
+          set -eo pipefail
           mkdir -p build/ios/ipa
           xcodebuild build \
             -project CarPlayBrowser.xcodeproj \
@@ -17,13 +18,19 @@ workflows:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
-      - name: Package IPA
+      - name: Embed entitlements and package IPA
         script: |
-          cd build/Build/Products/Release-iphoneos
+          set -e
+          APP_DIR="$CM_BUILD_DIR/build/Build/Products/Release-iphoneos"
+          # An unsigned build carries no entitlements, so add the CarPlay one with ldid.
+          ldid -S"$CM_BUILD_DIR/CarPlayBrowser.entitlements" "$APP_DIR/CarPlayBrowser.app/CarPlayBrowser"
+          cd "$APP_DIR"
+          rm -rf Payload CarPlayBrowser.ipa
           mkdir Payload
           cp -r CarPlayBrowser.app Payload/
-          zip -r CarPlayBrowser.ipa Payload
-          cp CarPlayBrowser.ipa $CM_BUILD_DIR/build/ios/ipa/
+          zip -qry CarPlayBrowser.ipa Payload
+          cp CarPlayBrowser.ipa "$CM_BUILD_DIR/build/ios/ipa/"
     artifacts:
       - build/ios/ipa/*.ipa

@@ -1,6 +1,10 @@
 name: CarPlayBrowser
 options:
   bundleIdPrefix: com.carplaybrowser
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
 targets:
   CarPlayBrowser:
     type: application
@@ -10,5 +14,23 @@ targets:
       - Sources
     info:
       path: Info.plist
+      # Repeated here so XcodeGen regenerating Info.plist never drops the scene setup.
+      properties:
+        CFBundleDisplayName: CarPlay Browser
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+          UISceneConfigurations:
+            CPTemplateApplicationSceneSessionRoleApplication:
+              - UISceneClassName: CPTemplateApplicationScene
+                UISceneConfigurationName: CarPlay Configuration
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).CarPlaySceneDelegate
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
     entitlements:
       path: CarPlayBrowser.entitlements
+      properties:
+        com.apple.developer.carplay-maps: true

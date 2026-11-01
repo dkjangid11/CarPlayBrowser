@@ -2,40 +2,42 @@ import CarPlay
 import UIKit
 import WebKit
 
-class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPMapTemplateDelegate {
-    
+class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPMapTemplateDelegate, WKNavigationDelegate {
+
     var window: UIWindow?
     var interfaceController: CPInterfaceController?
     var mapTemplate: CPMapTemplate?
     var webView: WKWebView?
-    
-    // This is called when the CarPlay display connects
+
+    // MARK: - CarPlay connection
+
+    // Called when the CarPlay display connects.
     func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene,
                                   didConnect interfaceController: CPInterfaceController, to window: CPWindow) {
-        
+
         self.interfaceController = interfaceController
         self.window = window
-        
-        // 1. Setup the dummy Map Template
-        // We MUST use a map template to satisfy the CarPlay navigation entitlement.
+
+        // 1. Map template: required to satisfy the CarPlay navigation entitlement.
         let mapTemplate = CPMapTemplate()
         mapTemplate.mapDelegate = self
         self.mapTemplate = mapTemplate
-        
-        // 2. Setup the Web View
+
+        // 2. Web view
         let webConfiguration = WKWebViewConfiguration()
         webConfiguration.allowsInlineMediaPlayback = true
-        if #available(iOS 14.0, *) {
-            webConfiguration.defaultWebpagePreferences.allowsContentJavaScript = true
-        }
-        
+        webConfiguration.mediaTypesRequiringUserActionForPlayback = []
+        webConfiguration.defaultWebpagePreferences.allowsContentJavaScript = true
+
         let webView = WKWebView(frame: window.bounds, configuration: webConfiguration)
+        webView.navigationDelegate = self
+        webView.allowsBackForwardNavigationGestures = true
         self.webView = webView
-        
-        // 3. Setup the custom UIViewController to hold our WebView
+
+        // 3. View controller that hosts the web view
         let rootViewController = UIViewController()
         rootViewController.view.backgroundColor = .black
-        
+
         rootViewController.view.addSubview(webView)
         webView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -44,25 +46,37 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPM
             webView.leadingAnchor.constraint(equalTo: rootViewController.view.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: rootViewController.view.trailingAnchor)
         ])
-        
-        // 4. THE LOOPHOLE: Assign our custom view controller directly to the CarPlay window
+
+        // 4. Assign the custom view controller directly to the CarPlay window.
         window.rootViewController = rootViewController
         window.isUserInteractionEnabled = true
         window.makeKeyAndVisible()
-        
-        // Push the map template so CarPlay doesn't complain about a missing template
+
+        // The map template keeps CarPlay happy and carries the navigation buttons.
         interfaceController.setRootTemplate(mapTemplate, animated: false, completion: nil)
-        
-        // 5. Load YouTube
-        if let url = URL(string: "https://www.youtube.com") {
-            let request = URLRequest(url: url)
-            webView.load(request)
-        }
-        
-        // 6. Setup Navigation Buttons on the map template
+
+        // 5. Resume the last page, or open the home page.
+        webView.load(URLRequest(url: BrowserSettings.lastURL ?? BrowserSettings.homeURL))
+
+        // 6. Navigation buttons
         setupNavigationButtons()
     }
-    
+
+    func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene,
+                                  didDisconnect interfaceController: CPInterfaceController,
+                                  from window: CPWindow) {
+        webView?.stopLoading()
+        webView?.navigationDelegate = nil
+        window.rootViewController = nil
+
+        self.interfaceController = nil
+        self.mapTemplate = nil
+        self.window = nil
+        self.webView = nil
+    }
+
+    // MARK: - Map buttons
+
     private func setupNavigationButtons() {
         let backButton = CPMapButton { [weak self] _ in
             if self?.webView?.canGoBack == true {
@@ -70,27 +84,70 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPM
             }
         }
         backButton.image = UIImage(systemName: "chevron.left")
-        
+
         let forwardButton = CPMapButton { [weak self] _ in
             if self?.webView?.canGoForward == true {
                 self?.webView?.goForward()
             }
         }
         forwardButton.image = UIImage(systemName: "chevron.right")
-        
+
         let reloadButton = CPMapButton { [weak self] _ in
-            self?.webView?.reload()
+            self?.reloadOrRetry()
         }
         reloadButton.image = UIImage(systemName: "arrow.clockwise")
-        
-        mapTemplate?.mapButtons = [backButton, forwardButton, reloadButton]
+
+        let homeButton = CPMapButton { [weak self] _ in
+            self?.webView?.load(URLRequest(url: BrowserSettings.homeURL))
+        }
+        homeButton.image = UIImage(systemName: "house")
+
+        mapTemplate?.mapButtons = [backButton, forwardButton, reloadButton, homeButton]
     }
-    
-    func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene,
-                                  didDisconnect interfaceController: CPInterfaceController,
-                                  from window: CPWindow) {
-        self.interfaceController = nil
-        self.window = nil
-        self.webView = nil
+
+    /// Reloads the current page; if an error page is showing, retries the last real page instead.
+    private func reloadOrRetry() {
+        guard let webView = webView else { return }
+        if let url = webView.url, url.scheme == "http" || url.scheme == "https" {
+            webView.reload()
+        } else {
+            webView.load(URLRequest(url: BrowserSettings.lastURL ?? BrowserSettings.homeURL))
+        }
+    }
+
+    // MARK: - WKNavigationDelegate
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let url = webView.url, url.scheme == "http" || url.scheme == "https" {
+            BrowserSettings.lastURL = url
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        showError(error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        showError(error)
+    }
+
+    private func showError(_ error: Error) {
+        let nsError = error as NSError
+        // Cancelled loads (e.g. the user tapped a link mid-load) are not errors worth showing.
+        guard nsError.code != NSURLErrorCancelled else { return }
+
+        let message = nsError.localizedDescription
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        let html = """
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+        <body style="background:#000;color:#fff;font-family:-apple-system;text-align:center;padding-top:20vh">
+        <h2>Couldn't load the page</h2>
+        <p>\(message)</p>
+        <p>Tap reload to try again.</p>
+        </body></html>
+        """
+        webView?.loadHTMLString(html, baseURL: nil)
     }
 }
